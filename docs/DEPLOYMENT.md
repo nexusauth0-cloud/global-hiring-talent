@@ -4,7 +4,7 @@
 - PostgreSQL database (Neon/Render/Supabase etc)
 - Vercel account (or other hosting)
 - SMTP provider (or leave empty; emails will be recorded as skipped)
-- S3-compatible storage if you need document uploads in production (local disk not persistent on serverless)
+- No external storage needed: CVs are stored in PostgreSQL (`documents.data`, `bytea`).
 
 ## Environment Variables
 Set these in Vercel (and locally in `.env`):
@@ -16,7 +16,9 @@ Set these in Vercel (and locally in `.env`):
 | `AUTH_SECRET` | Long random string (>=32 chars) |
 | `SMTP_URL` | Optional SMTP connection string |
 | `FORMSUBMIT_EMAIL` | Optional FormSubmit target |
-| `UPLOAD_DIR` | `var/uploads` (or use S3 adapter; not implemented) |
+| `RECRUITMENT_NOTIFY_EMAIL` | Internal mailbox for application/hiring notifications; falls back to a real `COMPANY_EMAIL` |
+| `EMAIL_VERIFICATION_ENFORCED` | `false` (default) or `true`. Keep `false` until email delivery works, then enable to block unverified self-service accounts |
+| `UPLOAD_DIR` | Legacy read path only; new CVs are stored in PostgreSQL |
 | `COMPANY_NAME` | Optional; defaults to placeholder if not set |
 | `COMPANY_EMAIL` | Must be configured for real contact; currently placeholders in config |
 | `COMPANY_PHONE` | Placeholder-safe |
@@ -30,7 +32,9 @@ Notes:
 - No public admin signup — use `npm run create-admin` against the production DB.
 - Emails: if SMTP/forFormSubmit not configured, attempts are logged to `notifications` with `skipped` status; the app never fabricates delivery.
 - Rate limiting is in-memory per process (documented limitation for serverless).
-- Uploads: magic-byte + extension validation; private download route. Serverless needs S3-compatible storage.
+- Uploads: magic-byte + extension + MIME validation; bytes stored in PostgreSQL (`documents.data`); private, authorization-checked download route. `UPLOAD_DIR` is only read for legacy files created before the bytea migration.
+- Email verification for self-service accounts (candidate and employer) is gated by `EMAIL_VERIFICATION_ENFORCED`. While it is `false` (default), unverified accounts can use their dashboards normally and verification stays optional — this avoids locking out accounts before email delivery is configured. Set `EMAIL_VERIFICATION_ENFORCED=true` once emails can be delivered: unverified accounts can still sign in and resend a link, but dashboards and protected actions are blocked until verified. Staff accounts (admin/recruiter) are always treated as verified.
+- Resending a verification link, or requesting a new password reset, invalidates earlier unused links.
 
 ## Database Setup
 1. Provision PostgreSQL

@@ -22,6 +22,9 @@ import {
   createSession,
   destroySession,
   revokeAllSessions,
+  requireUser,
+  requiresEmailVerification,
+  needsEmailVerification,
   roleDashboard,
 } from "@/lib/auth/session";
 import { rateLimit } from "@/lib/rate-limit";
@@ -49,6 +52,15 @@ async function emailTaken(email: string): Promise<boolean> {
     .where(eq(sql`lower(${users.email})`, email))
     .limit(1);
   return rows.length > 0;
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: string }).code === "23505"
+  );
 }
 
 export async function registerCandidateAction(
@@ -107,7 +119,7 @@ export async function registerCandidateAction(
       return user.id;
     });
 
-    await maybeSendVerification(userId, data.email, data.firstName);
+    await issueVerificationToken(userId, data.email, data.firstName);
     await recordAudit({
       actorUserId: userId,
       action: "auth.register",
@@ -116,11 +128,20 @@ export async function registerCandidateAction(
       metadata: { role: "candidate" },
     });
     await createSession(userId);
-  } catch {
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return fail("An account with this email already exists.", {
+        email: "This email is already registered.",
+      });
+    }
     return fail("We could not create your account right now. Please try again.");
   }
 
-  redirect("/candidate");
+  redirect(
+    needsEmailVerification({ role: "candidate", emailVerifiedAt: null })
+      ? "/verify-email?required=1"
+      : "/candidate"
+  );
 }
 
 export async function registerEmployerAction(
@@ -202,7 +223,7 @@ export async function registerEmployerAction(
       return user.id;
     });
 
-    await maybeSendVerification(userId, data.email, data.contactName);
+    await issueVerificationToken(userId, data.email, data.contactName);
     await recordAudit({
       actorUserId: userId,
       action: "auth.register",
@@ -211,11 +232,20 @@ export async function registerEmployerAction(
       metadata: { role: "employer", organization: slugify(data.organizationName) },
     });
     await createSession(userId);
-  } catch {
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return fail("An account with this email already exists.", {
+        email: "This email is already registered.",
+      });
+    }
     return fail("We could not create your account right now. Please try again.");
   }
 
-  redirect("/employer");
+  redirect(
+    needsEmailVerification({ role: "employer", emailVerifiedAt: null })
+      ? "/verify-email?required=1"
+      : "/employer"
+  );
 }
 
 export async function loginAction(
@@ -251,6 +281,7 @@ export async function loginAction(
       role: users.role,
       passwordHash: users.passwordHash,
       isActive: users.isActive,
+      emailVerifiedAt: users.emailVerifiedAt,
     })
     .from(users)
     .where(eq(sql`lower(${users.email})`, email))
@@ -277,6 +308,10 @@ export async function loginAction(
     targetType: "user",
     targetId: user.id,
   });
+
+  if (needsEmailVerification(user)) {
+    redirect("/verify-email?required=1");
+  }
 
   const safeNext = next.startsWith("/") && !next.startsWith("//") ? next : null;
   redirect(safeNext ?? roleDashboard(user.role));
@@ -310,6 +345,17 @@ export async function forgotPasswordAction(
     .limit(1);
   const user = rows[0];
   if (!user || !user.isActive) return generic;
+
+  // Requesting a new link invalidates any earlier, still-unused reset link.
+  await db
+    .update(passwordResetTokens)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(passwordResetTokens.userId, user.id),
+        isNull(passwordResetTokens.usedAt)
+      )
+    );
 
   const token = generateToken(32);
   await db.insert(passwordResetTokens).values({
@@ -349,8 +395,13 @@ export async function resetPasswordAction(
   }
 
   const rows = await db
-    .select({ id: passwordResetTokens.id, userId: passwordResetTokens.userId })
+    .select({
+      id: passwordResetTokens.id,
+      userId: passwordResetTokens.userId,
+      email: users.email,
+    })
     .from(passwordResetTokens)
+    .innerJoin(users, eq(users.id, passwordResetTokens.userId))
     .where(
       and(
         eq(passwordResetTokens.tokenHash, sha256(parsed.data.token)),
@@ -373,6 +424,16 @@ export async function resetPasswordAction(
       .update(passwordResetTokens)
       .set({ usedAt: new Date() })
       .where(eq(passwordResetTokens.id, record.id));
+    // Any other outstanding reset links for this user are now void.
+    await tx
+      .update(passwordResetTokens)
+      .set({ usedAt: new Date() })
+      .where(
+        and(
+          eq(passwordResetTokens.userId, record.userId),
+          isNull(passwordResetTokens.usedAt)
+        )
+      );
   });
   await revokeAllSessions(record.userId);
   await recordAudit({
@@ -380,6 +441,17 @@ export async function resetPasswordAction(
     action: "auth.password_reset",
     targetType: "user",
     targetId: record.userId,
+  });
+
+  // Inform the account owner that their password changed.
+  await sendNotification({
+    template: "password_changed",
+    to: record.email,
+    userId: record.userId,
+    data: {
+      name: record.email.split("@")[0],
+      changedAt: new Date().toISOString(),
+    },
   });
 
   return ok("Your password has been reset. You can now sign in.");
@@ -409,21 +481,44 @@ export async function verifyEmailAction(
   await db.transaction(async (tx) => {
     await tx
       .update(users)
-      .set({ emailVerifiedAt: new Date() })
+      .set({ emailVerifiedAt: new Date(), updatedAt: new Date() })
       .where(eq(users.id, record.userId));
+    // Mark this link (and any siblings) as used so they cannot be replayed.
     await tx
       .update(emailVerificationTokens)
       .set({ usedAt: new Date() })
-      .where(eq(emailVerificationTokens.id, record.id));
+      .where(
+        and(
+          eq(emailVerificationTokens.userId, record.userId),
+          isNull(emailVerificationTokens.usedAt)
+        )
+      );
+  });
+  await recordAudit({
+    actorUserId: record.userId,
+    action: "auth.email_verified",
+    targetType: "user",
+    targetId: record.userId,
   });
   return ok("Your email address has been verified.");
 }
 
-async function maybeSendVerification(
+async function issueVerificationToken(
   userId: string,
   email: string,
   name: string
 ): Promise<void> {
+  // Issuing a new link invalidates any earlier, still-unused verification link.
+  await db
+    .update(emailVerificationTokens)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(emailVerificationTokens.userId, userId),
+        isNull(emailVerificationTokens.usedAt)
+      )
+    );
+
   const token = generateToken(32);
   await db.insert(emailVerificationTokens).values({
     userId,
@@ -436,4 +531,48 @@ async function maybeSendVerification(
     userId,
     data: { name, token },
   });
+}
+
+export async function resendVerificationAction(
+  _prev: ActionResult | undefined,
+  _formData: FormData
+): Promise<ActionResult> {
+  let ctx;
+  try {
+    ctx = await requireUser();
+  } catch {
+    return fail("You must be signed in to request a new verification email.");
+  }
+
+  if (!requiresEmailVerification(ctx.user.role)) {
+    return ok("This account does not require email verification.");
+  }
+  if (ctx.user.emailVerifiedAt) {
+    return ok("Your email address is already verified.");
+  }
+
+  const key = await rateLimitKey("resend-verification", ctx.user.id);
+  if (!rateLimit(key, 3, 60 * 60 * 1000).allowed) {
+    return fail(
+      "You have requested several verification emails already. Please wait an hour before trying again.",
+      undefined,
+      "RATE_LIMITED"
+    );
+  }
+
+  await issueVerificationToken(
+    ctx.user.id,
+    ctx.user.email,
+    ctx.user.email.split("@")[0]
+  );
+  await recordAudit({
+    actorUserId: ctx.user.id,
+    action: "auth.verification_resent",
+    targetType: "user",
+    targetId: ctx.user.id,
+  });
+
+  return ok(
+    "We have sent a new verification link to your email address if it is not yet verified."
+  );
 }

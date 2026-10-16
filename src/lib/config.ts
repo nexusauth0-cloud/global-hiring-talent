@@ -12,6 +12,8 @@ const envSchema = z.object({
   SMTP_URL: z.string().optional().default(""),
   SMTP_FROM: z.string().optional().default(""),
   FORMSUBMIT_EMAIL: z.string().optional().default(""),
+  RECRUITMENT_NOTIFY_EMAIL: z.string().optional().default(""),
+  EMAIL_VERIFICATION_ENFORCED: z.string().optional().default("false"),
   STORAGE_DRIVER: z.enum(["local"]).default("local"),
   UPLOAD_DIR: z.string().default("var/uploads"),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(5 * 1024 * 1024),
@@ -72,6 +74,32 @@ export const company = {
 };
 
 export const siteUrl = env.NEXT_PUBLIC_SITE_URL.replace(/\/$/, "");
+
+/**
+ * Internal mailbox that should receive recruitment notifications (new
+ * applications, hiring requests). Prefers the explicit
+ * `RECRUITMENT_NOTIFY_EMAIL`; falls back to the company contact address only
+ * when it is a real address (not a placeholder). Returns "" when nothing is
+ * configured, in which case the notification is skipped and recorded honestly.
+ */
+export function recruitmentRecipient(): string {
+  if (env.RECRUITMENT_NOTIFY_EMAIL) return env.RECRUITMENT_NOTIFY_EMAIL;
+  if (!isPlaceholder(env.COMPANY_EMAIL)) return env.COMPANY_EMAIL;
+  return "";
+}
+
+/**
+ * Whether unverified candidate/employer accounts are blocked from their
+ * dashboards and protected actions. Defaults to `false` so the feature can be
+ * deployed safely before an email transport is available; enable (set
+ * `EMAIL_VERIFICATION_ENFORCED=true`) only once verification emails can be
+ * delivered, otherwise existing unverified users would be locked out.
+ */
+export function emailVerificationEnforced(): boolean {
+  return ["1", "true", "yes", "on"].includes(
+    env.EMAIL_VERIFICATION_ENFORCED.trim().toLowerCase()
+  );
+}
 
 export const MAX_UPLOAD_BYTES = env.MAX_UPLOAD_BYTES;
 

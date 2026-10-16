@@ -1,5 +1,10 @@
 import "server-only";
-import { requireUser, AuthError, type SessionUser } from "@/lib/auth/session";
+import {
+  requireUser,
+  needsEmailVerification,
+  AuthError,
+  type SessionUser,
+} from "@/lib/auth/session";
 import type { User } from "@/db/schema";
 
 type Role = User["role"];
@@ -32,6 +37,23 @@ export async function requireRole(
   const ctx = await requireUser();
   if (!roles.includes(ctx.user.role)) {
     throw new AuthError("FORBIDDEN");
+  }
+  return ctx;
+}
+
+/**
+ * Like `requireRole`, but also rejects self-service accounts (candidate /
+ * employer) whose email address has not been verified yet.
+ */
+export async function requireVerifiedRole(
+  ...roles: Role[]
+): Promise<{ user: SessionUser; sessionId: string }> {
+  const ctx = await requireRole(...roles);
+  if (needsEmailVerification(ctx.user)) {
+    throw new AuthError(
+      "EMAIL_NOT_VERIFIED",
+      "Please verify your email address to continue."
+    );
   }
   return ctx;
 }

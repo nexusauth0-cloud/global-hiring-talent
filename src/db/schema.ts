@@ -12,8 +12,15 @@ import {
   uniqueIndex,
   index,
   check,
+  customType,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
 
 export const userRole = pgEnum("user_role", [
   "candidate",
@@ -286,6 +293,7 @@ export const documents = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     kind: documentKind("kind").notNull(),
     storageKey: text("storage_key").notNull(),
+    data: bytea("data"),
     originalName: varchar("original_name", { length: 255 }).notNull(),
     mimeType: varchar("mime_type", { length: 120 }).notNull(),
     sizeBytes: integer("size_bytes").notNull(),

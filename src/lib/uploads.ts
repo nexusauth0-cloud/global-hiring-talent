@@ -1,6 +1,6 @@
 import "server-only";
-import { mkdir, writeFile, readFile, stat, unlink } from "node:fs/promises";
-import { dirname, join, resolve, sep } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   env,
@@ -94,6 +94,12 @@ export function validateResumeFile(file: {
   };
 }
 
+/**
+ * New uploads are stored in PostgreSQL (`documents.data`, a `bytea` column)
+ * so they survive on serverless hosts such as Vercel. The filesystem helpers
+ * below are a read-only fallback for documents created before that change,
+ * whose bytes still live under `UPLOAD_DIR`.
+ */
 function uploadRoot(): string {
   return resolve(process.cwd(), env.UPLOAD_DIR);
 }
@@ -107,38 +113,6 @@ function resolveKey(storageKey: string): string {
   return full;
 }
 
-export async function storeFile(
-  ownerUserId: string,
-  upload: ValidatedUpload
-): Promise<{ storageKey: string; absolutePath: string }> {
-  const absolutePath = resolveKey(join(ownerUserId, upload.storageKey));
-  await mkdir(dirname(absolutePath), { recursive: true });
-  await writeFile(absolutePath, upload.buffer, { mode: 0o600 });
-  return { storageKey: join(ownerUserId, upload.storageKey), absolutePath };
-}
-
 export async function readStoredFile(storageKey: string): Promise<Buffer> {
-  const full = resolveKey(storageKey);
-  return readFile(full);
-}
-
-export async function fileExists(storageKey: string): Promise<boolean> {
-  try {
-    await stat(resolveKey(storageKey));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function deleteStoredFile(storageKey: string): Promise<void> {
-  try {
-    await unlink(resolveKey(storageKey));
-  } catch {
-    // ignore missing file
-  }
-}
-
-export function isLocalStorage(): boolean {
-  return env.STORAGE_DRIVER === "local";
+  return readFile(resolveKey(storageKey));
 }

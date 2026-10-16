@@ -9,6 +9,7 @@ export type EmailTemplate =
   | "contact_inquiry_received"
   | "email_verification"
   | "password_reset"
+  | "password_changed"
   | "review_received";
 
 export type RenderedEmail = {
@@ -137,21 +138,40 @@ export function renderEmail(
     }
     case "internal_application_notice": {
       const subject = `New application – ${data.jobTitle}`;
+      const submitted = data.submittedAt
+        ? new Date(data.submittedAt).toUTCString()
+        : "just now";
+      const details = [
+        `Candidate: ${data.candidateName}`,
+        `Email: ${data.candidateEmail}`,
+        data.candidatePhone ? `Phone: ${data.candidatePhone}` : "",
+        `Submitted: ${submitted}`,
+        `Reference: ${data.applicationRef}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
       return {
         subject,
         html: layout(
           "New job application",
           p(`A new application was submitted for ${data.jobTitle}.`) +
             p(`Candidate: ${data.candidateName} (${data.candidateEmail})`) +
+            (data.candidatePhone ? p(`Phone: ${data.candidatePhone}`) : "") +
+            p(`Submitted: ${submitted}`) +
             p(`Reference: ${data.applicationRef}`) +
+            (data.jobUrl ? button("View job posting", data.jobUrl) : "") +
+            (data.cvUrl ? button("Download CV", data.cvUrl) : "") +
             button("Review in admin", `${siteUrl}/admin/applications`)
         ),
         text: [
           `New application for ${data.jobTitle}.`,
-          `Candidate: ${data.candidateName} (${data.candidateEmail})`,
-          `Reference: ${data.applicationRef}`,
+          details,
+          data.jobUrl ? `Job posting: ${data.jobUrl}` : "",
+          data.cvUrl ? `Download CV: ${data.cvUrl}` : "",
           `Review: ${siteUrl}/admin/applications`,
-        ].join("\n\n"),
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
       };
     }
     case "employer_inquiry_received": {
@@ -235,6 +255,28 @@ export function renderEmail(
             button("Reset password", `${siteUrl}/reset-password?token=${data.token}`)
         ),
         text: `Reset your password: ${siteUrl}/reset-password?token=${data.token}`,
+      };
+    }
+    case "password_changed": {
+      const subject = `${company.name}: your password was changed`;
+      const when = data.changedAt
+        ? new Date(data.changedAt).toUTCString()
+        : "just now";
+      return {
+        subject,
+        html: layout(
+          "Your password was changed",
+          p(`Hello ${data.name},`) +
+            p(`The password for your ${company.name} account was changed on ${when}.`) +
+            p(
+              "If you made this change, no further action is needed. If you did not, your account may be compromised — please reset your password immediately and contact our team."
+            )
+        ),
+        text: [
+          `Hello ${data.name},`,
+          `The password for your ${company.name} account was changed on ${when}.`,
+          "If you did not make this change, reset your password immediately and contact our team.",
+        ].join("\n\n"),
       };
     }
     case "review_received": {

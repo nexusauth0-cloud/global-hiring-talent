@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { sessions, users, candidates, employers, organizations } from "@/db/schema";
 import type { User } from "@/db/schema";
 import { generateToken, sha256 } from "@/lib/auth/password";
-import { env } from "@/lib/config";
+import { env, emailVerificationEnforced } from "@/lib/config";
 
 const COOKIE_NAME = "ght_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
@@ -144,6 +144,31 @@ export class AuthError extends Error {
     super(message ?? code);
     this.name = "AuthError";
   }
+}
+
+/**
+ * Self-service account types that must confirm their email address before
+ * reaching their dashboards. Staff accounts (admin/recruiter) are provisioned
+ * internally via `create-admin` and are considered verified.
+ */
+export const VERIFICATION_REQUIRED_ROLES = ["candidate", "employer"] as const;
+
+export function requiresEmailVerification(role: User["role"]): boolean {
+  return (VERIFICATION_REQUIRED_ROLES as readonly string[]).includes(role);
+}
+
+/**
+ * Whether this account is currently *blocked* pending email verification.
+ * This is the enforcement-aware check used to redirect/deny access. It is
+ * `false` whenever `EMAIL_VERIFICATION_ENFORCED` is off, so accounts are never
+ * locked out before verification emails can be delivered. The `enforced`
+ * parameter is injectable for testing.
+ */
+export function needsEmailVerification(
+  user: { role: User["role"]; emailVerifiedAt: Date | null },
+  enforced: boolean = emailVerificationEnforced()
+): boolean {
+  return enforced && requiresEmailVerification(user.role) && !user.emailVerifiedAt;
 }
 
 export function roleDashboard(role: User["role"]): string {

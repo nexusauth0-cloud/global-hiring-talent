@@ -11,15 +11,11 @@ import {
   jobs,
   organizations,
 } from "@/db/schema";
-import { requireRole } from "@/lib/auth/rbac";
+import { requireVerifiedRole } from "@/lib/auth/rbac";
 import { AuthError, findCandidateProfile, requireUser } from "@/lib/auth/session";
 import { recordAudit } from "@/lib/audit";
 import { sendNotification } from "@/lib/email/adapter";
-import {
-  storeFile,
-  validateResumeFile,
-  UploadError,
-} from "@/lib/uploads";
+import { validateResumeFile, UploadError } from "@/lib/uploads";
 import { rateLimit } from "@/lib/rate-limit";
 import { rateLimitKey } from "@/lib/request";
 import {
@@ -30,18 +26,38 @@ import {
 } from "@/lib/validation/schemas";
 import { publicJobCondition } from "@/lib/queries";
 import { ok, fail, type ActionResult } from "@/server/action-result";
-import { company } from "@/lib/config";
+import { recruitmentRecipient, siteUrl } from "@/lib/config";
+
+type CandidateCtx = Awaited<ReturnType<typeof requireVerifiedRole>>;
+
+async function authCandidate(): Promise<
+  { ctx: CandidateCtx } | { error: ActionResult }
+> {
+  try {
+    return { ctx: await requireVerifiedRole("candidate") };
+  } catch (err) {
+    if (err instanceof AuthError && err.code === "EMAIL_NOT_VERIFIED") {
+      return {
+        error: fail(
+          "Please verify your email address before continuing.",
+          undefined,
+          "EMAIL_NOT_VERIFIED"
+        ),
+      };
+    }
+    return {
+      error: fail("You must be signed in as a candidate.", undefined, "FORBIDDEN"),
+    };
+  }
+}
 
 export async function updateCandidateProfileAction(
   _prev: ActionResult | undefined,
   formData: FormData
 ): Promise<ActionResult> {
-  let ctx;
-  try {
-    ctx = await requireRole("candidate");
-  } catch {
-    return fail("You must be signed in as a candidate.", undefined, "FORBIDDEN");
-  }
+  const auth = await authCandidate();
+  if ("error" in auth) return auth.error;
+  const { ctx } = auth;
 
   const parsed = candidateProfileSchema.safeParse({
     firstName: formData.get("firstName"),
@@ -96,12 +112,9 @@ export async function uploadResumeAction(
   _prev: ActionResult | undefined,
   formData: FormData
 ): Promise<ActionResult> {
-  let ctx;
-  try {
-    ctx = await requireRole("candidate");
-  } catch {
-    return fail("You must be signed in as a candidate.", undefined, "FORBIDDEN");
-  }
+  const auth = await authCandidate();
+  if ("error" in auth) return auth.error;
+  const { ctx } = auth;
 
   const key = await rateLimitKey("upload", ctx.user.id);
   if (!rateLimit(key, 10, 60 * 60 * 1000).allowed) {
@@ -130,15 +143,14 @@ export async function uploadResumeAction(
   }
 
   try {
-    const { storageKey } = await storeFile(ctx.user.id, validated);
-
     await db.transaction(async (tx) => {
       const [doc] = await tx
         .insert(documents)
         .values({
           ownerUserId: ctx.user.id,
           kind: "resume",
-          storageKey,
+          storageKey: validated.storageKey,
+          data: validated.buffer,
           originalName: validated.originalName,
           mimeType: validated.mimeType,
           sizeBytes: validated.sizeBytes,
@@ -170,12 +182,9 @@ export async function submitApplicationAction(
   _prev: ActionResult | undefined,
   formData: FormData
 ): Promise<ActionResult> {
-  let ctx;
-  try {
-    ctx = await requireRole("candidate");
-  } catch {
-    return fail("You must be signed in as a candidate to apply.", undefined, "FORBIDDEN");
-  }
+  const auth = await authCandidate();
+  if ("error" in auth) return auth.error;
+  const { ctx } = auth;
 
   const parsed = applicationSchema.safeParse({
     jobId: formData.get("jobId"),
@@ -265,7 +274,7 @@ export async function submitApplicationAction(
     },
   });
 
-  const internalRecipient = company.hasRealContactEmail ? company.email : null;
+  const internalRecipient = recruitmentRecipient();
   if (internalRecipient) {
     await sendNotification({
       template: "internal_application_notice",
@@ -274,8 +283,12 @@ export async function submitApplicationAction(
       data: {
         candidateName: `${profile.firstName} ${profile.lastName}`,
         candidateEmail: data.contactEmail,
+        candidatePhone: data.contactPhone || "Not provided",
         jobTitle: job.title,
+        jobUrl: `${siteUrl}/jobs/${job.slug}`,
         applicationRef: applicationId.slice(0, 8).toUpperCase(),
+        submittedAt: new Date().toISOString(),
+        cvUrl: `${siteUrl}/api/documents/${profile.resumeDocumentId}`,
       },
     });
   }
@@ -297,12 +310,9 @@ export async function withdrawApplicationAction(
   _prev: ActionResult | undefined,
   formData: FormData
 ): Promise<ActionResult> {
-  let ctx;
-  try {
-    ctx = await requireRole("candidate");
-  } catch {
-    return fail("You must be signed in as a candidate.", undefined, "FORBIDDEN");
-  }
+  const auth = await authCandidate();
+  if ("error" in auth) return auth.error;
+  const { ctx } = auth;
   const applicationId = String(formData.get("applicationId") ?? "");
   if (!applicationId) return fail("Missing application reference.");
 

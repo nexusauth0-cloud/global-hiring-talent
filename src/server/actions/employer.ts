@@ -11,7 +11,7 @@ import {
   jobs,
   organizations,
 } from "@/db/schema";
-import { requireRole } from "@/lib/auth/rbac";
+import { requireRole, requireVerifiedRole } from "@/lib/auth/rbac";
 import {
   AuthError,
   findEmployerProfile,
@@ -19,6 +19,7 @@ import {
 } from "@/lib/auth/session";
 import { recordAudit } from "@/lib/audit";
 import { sendNotification } from "@/lib/email/adapter";
+import { recruitmentRecipient } from "@/lib/config";
 import { rateLimit } from "@/lib/rate-limit";
 import { rateLimitKey } from "@/lib/request";
 import {
@@ -33,10 +34,21 @@ import { humanizeStatus, uniqueSlug } from "@/lib/utils";
 import { ok, fail, type ActionResult } from "@/server/action-result";
 
 async function requireEmployer() {
-  const ctx = await requireRole("employer");
+  const ctx = await requireVerifiedRole("employer");
   const profile = await findEmployerProfile(ctx.user.id);
   if (!profile) throw new AuthError("FORBIDDEN", "No organization linked to account.");
   return { ctx, employer: profile.employer, org: profile.organization };
+}
+
+function employerAuthFail(err: unknown): ActionResult {
+  if (err instanceof AuthError && err.code === "EMAIL_NOT_VERIFIED") {
+    return fail(
+      "Please verify your email address before continuing.",
+      undefined,
+      "EMAIL_NOT_VERIFIED"
+    );
+  }
+  return fail("You must be signed in as an employer.", undefined, "FORBIDDEN");
 }
 
 function slugExists(model: "jobs" | "organizations") {
@@ -65,8 +77,8 @@ export async function updateOrganizationProfileAction(
   let c;
   try {
     c = await requireEmployer();
-  } catch {
-    return fail("You must be signed in as an employer.", undefined, "FORBIDDEN");
+  } catch (err) {
+    return employerAuthFail(err);
   }
 
   const parsed = organizationProfileSchema.safeParse({
@@ -150,8 +162,8 @@ export async function createJobAction(
   let c;
   try {
     c = await requireEmployer();
-  } catch {
-    return fail("You must be signed in as an employer.", undefined, "FORBIDDEN");
+  } catch (err) {
+    return employerAuthFail(err);
   }
   if (c.org.status !== "approved") {
     return fail(
@@ -225,8 +237,8 @@ export async function updateJobAction(
   let c;
   try {
     c = await requireEmployer();
-  } catch {
-    return fail("You must be signed in as an employer.", undefined, "FORBIDDEN");
+  } catch (err) {
+    return employerAuthFail(err);
   }
   const jobId = String(formData.get("jobId") ?? "");
   if (!jobId) return fail("Missing job reference.");
@@ -299,8 +311,8 @@ export async function setJobStatusAction(
   let c;
   try {
     c = await requireEmployer();
-  } catch {
-    return fail("You must be signed in as an employer.", undefined, "FORBIDDEN");
+  } catch (err) {
+    return employerAuthFail(err);
   }
   const jobId = String(formData.get("jobId") ?? "");
   const status = String(formData.get("status") ?? "");
@@ -349,8 +361,8 @@ export async function createHiringRequestAction(
   let c;
   try {
     c = await requireEmployer();
-  } catch {
-    return fail("You must be signed in as an employer.", undefined, "FORBIDDEN");
+  } catch (err) {
+    return employerAuthFail(err);
   }
 
   const key = await rateLimitKey("hiring_request", c.ctx.user.id);
@@ -414,6 +426,20 @@ export async function createHiringRequestAction(
     },
   });
 
+  const internalRecipient = recruitmentRecipient();
+  if (internalRecipient) {
+    await sendNotification({
+      template: "internal_hiring_request_notice",
+      to: internalRecipient,
+      meta: { hiringRequestId: requestId },
+      data: {
+        organizationName: c.org.name,
+        requestTitle: data.title,
+        rolesNeeded: String(data.rolesNeeded),
+      },
+    });
+  }
+
   await recordAudit({
     actorUserId: c.ctx.user.id,
     action: "hiring_request.create",
@@ -443,8 +469,8 @@ export async function updateApplicationStatusAction(
   let c;
   try {
     c = await requireEmployer();
-  } catch {
-    return fail("You must be signed in as an employer.", undefined, "FORBIDDEN");
+  } catch (err) {
+    return employerAuthFail(err);
   }
 
   const parsed = applicationStatusSchema.safeParse({

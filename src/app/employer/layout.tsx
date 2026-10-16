@@ -1,6 +1,10 @@
 import { redirect } from "next/navigation";
 import { DashboardShell } from "@/components/layout/DashboardShell";
-import { getAuthContext, roleDashboard } from "@/lib/auth/session";
+import {
+  getAuthContext,
+  needsEmailVerification,
+  roleDashboard,
+} from "@/lib/auth/session";
 
 const navItems = [
   { href: "/employer", label: "Overview", exact: true },
@@ -18,6 +22,9 @@ export default async function EmployerLayout({
   const ctx = await getAuthContext();
   if (!ctx) redirect("/login?next=/employer");
   if (ctx.user.role !== "employer") redirect(roleDashboard(ctx.user.role));
+  if (needsEmailVerification(ctx.user)) {
+    redirect("/verify-email?required=1");
+  }
 
   return (
     <DashboardShell

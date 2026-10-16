@@ -66,13 +66,17 @@ export async function GET(
   }
 
   let buffer: Buffer;
-  try {
-    buffer = await readStoredFile(doc.storageKey);
-  } catch {
-    return NextResponse.json(
-      { error: "The document could not be retrieved." },
-      { status: 404 }
-    );
+  if (doc.data && doc.data.length > 0) {
+    buffer = Buffer.from(doc.data);
+  } else {
+    try {
+      buffer = await readStoredFile(doc.storageKey);
+    } catch {
+      return NextResponse.json(
+        { error: "The document could not be retrieved." },
+        { status: 404 }
+      );
+    }
   }
 
   const safeName = (doc.originalName ?? "document").replace(/"/g, "");
