@@ -57,10 +57,10 @@ export default async function CandidateDashboardPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-extrabold text-brand-900">
+        <h1 className="text-3xl font-extrabold tracking-tight text-brand-900 sm:text-4xl">
           Welcome, {profile.firstName}
         </h1>
-        <p className="mt-1 text-sm text-slate-600">
+        <p className="mt-2 text-base text-slate-600">
           Manage your profile, CV and job applications.
         </p>
       </div>
@@ -83,7 +83,7 @@ export default async function CandidateDashboardPage() {
         />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
+      <div className="grid gap-6 lg:grid-cols-[1fr_22rem] xl:grid-cols-[1fr_24rem]">
         <Card>
           <CardHeader className="flex items-center justify-between">
             <CardTitle>Recent applications</CardTitle>
@@ -194,12 +194,12 @@ function StatCard({
 }) {
   return (
     <Card>
-      <CardBody className="flex items-center gap-4">
+      <CardBody className="flex items-center gap-5 py-6">
         <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-brand-100 text-brand-700">
           {icon}
         </span>
         <div>
-          <p className="text-2xl font-extrabold text-brand-900">{value}</p>
+          <p className="text-3xl font-extrabold tracking-tight text-brand-900">{value}</p>
           <p className="text-sm text-slate-600">{label}</p>
         </div>
       </CardBody>

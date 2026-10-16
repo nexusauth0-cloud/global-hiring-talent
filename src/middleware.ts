@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+const isDev = process.env.NODE_ENV !== "production";
+
 const CSP = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -9,8 +11,10 @@ const CSP = [
   "font-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   // Next.js injects inline bootstrap scripts; 'unsafe-inline' is required
-  // until a nonce-based CSP is introduced.
-  "script-src 'self' 'unsafe-inline'",
+  // until a nonce-based CSP is introduced. The dev server also relies on
+  // eval() for its HMR/webpack runtime, so 'unsafe-eval' is added in
+  // development only and kept out of production.
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "connect-src 'self'",
   "form-action 'self'",
 ].join("; ");

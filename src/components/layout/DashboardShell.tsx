@@ -41,7 +41,7 @@ export function DashboardShell({
       </header>
 
       <div className="container-page py-8">
-        <div className="lg:grid lg:grid-cols-[16rem_1fr] lg:gap-8">
+        <div className="lg:grid lg:grid-cols-[18rem_1fr] lg:gap-8 xl:grid-cols-[20rem_1fr] xl:gap-10">
           <aside className="mb-6 lg:mb-0">
             <div className="rounded-xl border border-slate-200 bg-white p-3 lg:sticky lg:top-6">
               <DashboardNav items={navItems} />
